@@ -121,6 +121,11 @@ class AgentLoopWorkerTQ(AgentLoopWorker):
             do_sample = prompt.pop("__do_sample__", True)
 
             run_sampling_params = dict(sampling_params)
+            if not trajectory["validate"] and "sample_horizon" in prompt:
+                horizon = int(prompt["sample_horizon"])
+                if not 1 <= horizon <= config.response_length:
+                    raise ValueError(f"Invalid sample_horizon={horizon}; response_length={config.response_length}")
+                run_sampling_params["max_tokens"] = horizon
             if not trajectory["validate"] and not do_sample:
                 apply_greedy_sampling_params(run_sampling_params)
 

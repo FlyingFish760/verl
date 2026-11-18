@@ -136,6 +136,12 @@ class PPOTrainer(ABC):
         # track mini-batch index within a parameter_sync_step cycle for Decoupled PPO
         self.local_trigger_step = 0
         self._restored_tq_prompt_count = 0
+        # Optional external horizon controller; no dependency on the research project when disabled.
+        self.horizon_bridge = None
+        horizon_config = config.trainer.get("horizon_control")
+        if horizon_config and horizon_config.get("enabled", False):
+            bridge_cls = load_extern_type(horizon_config.bridge_path, horizon_config.bridge_name)
+            self.horizon_bridge = bridge_cls(config)
 
     def _build_replay_buffer(self) -> ReplayBuffer:
         """Instantiate the replay buffer (or a user-provided custom sampler).
@@ -476,6 +482,8 @@ class PPOTrainer(ABC):
 
                 self._start_profiling()
                 batch = self.step(metrics, self.timing_raw)
+                if self.horizon_bridge is not None:
+                    self.horizon_bridge.observe(self.global_steps, batch)
                 self._stop_profiling()
 
                 # 2. save checkpoint
@@ -715,6 +723,8 @@ class PPOTrainer(ABC):
             is_train=True,
             max_samples=self.config.data.get("train_max_samples", -1),
         )
+        if self.horizon_bridge is not None and len(self.train_dataset) != self.config.data.train_batch_size:
+            raise ValueError("Horizon control requires exactly one full batch after prompt filtering")
         self.val_dataset = create_rl_dataset(
             self.config.data.val_files,
             self.config.data,
@@ -1506,6 +1516,8 @@ class PPOTrainer(ABC):
 
     def _submit_batch_to_rollout(self, batch: TensorDict) -> int:
         """Register prompts in TransferQueue and dispatch them for generation."""
+        if self.horizon_bridge is not None:
+            self.horizon_bridge.attach(self.global_steps, batch)
         tags = [{"is_prompt": True, "status": "pending", "global_steps": self.global_steps} for _ in range(len(batch))]
         if self.trainer_mode != "sync":
             tq.kv_batch_put(
