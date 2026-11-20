@@ -717,6 +717,7 @@ class vLLMHttpServer:
 
         rejected = await self._park_until_admitted(request_id)
         if rejected is not None:
+            rejected.extra_fields.update(response_horizon=sampling_params.max_tokens, finish_reason="abort")
             return rejected
 
         with RLInsightLogger.trace_state(
@@ -733,7 +734,11 @@ class vLLMHttpServer:
             )
             assert final_res is not None
 
-        extra_fields = {"global_steps": self.global_steps}
+        extra_fields = {
+            "global_steps": self.global_steps,
+            "response_horizon": sampling_params.max_tokens,
+            "finish_reason": final_res.outputs[0].finish_reason if final_res.outputs else "abort",
+        }
         # Handle abort case: when the request is aborted by pause_generation(abort),
         # outputs may be empty. Return empty results with stop_reason="aborted"
         # instead of crashing with "IndexError: list index out of range".

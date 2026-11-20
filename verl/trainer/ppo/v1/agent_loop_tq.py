@@ -38,6 +38,26 @@ logger = logging.getLogger(__name__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "INFO"))
 
 
+def _log_horizon_control(output: AgentLoopOutput, validate: bool, default_horizon=None, **kwargs) -> None:
+    """Report the requested horizon and the engine's stop cause for one trajectory."""
+    prompt_id = kwargs.get("index")
+    step = kwargs.get("global_steps")
+    prompt_id = prompt_id.item() if hasattr(prompt_id, "item") else prompt_id
+    step = step.item() if hasattr(step, "item") else step
+    horizon = default_horizon if validate else kwargs.get("sample_horizon", default_horizon)
+    horizon = horizon.item() if hasattr(horizon, "item") else horizon
+    finish_reason = output.extra_fields.get("finish_reason")
+    logger.info(
+        "HORIZON_CONTROL: prompt_id=%s step=%s validate=%s response_horizon=%s actual_length=%s horizon_reached=%s",
+        prompt_id,
+        step,
+        bool(validate),
+        horizon,
+        len(output.response_ids),
+        finish_reason == "length" if finish_reason is not None else None,
+    )
+
+
 def apply_greedy_sampling_params(params: dict[str, Any]) -> None:
     # Greedy REMAX baselines are used for their rewards, not score-centering training heads.
     params.pop("topk_log_probs", None)
@@ -166,6 +186,14 @@ class AgentLoopWorkerTQ(AgentLoopWorker):
         if not outputs:
             logger.warning(f"Empty output for prompt {uid}_{session_id}")
             return
+
+        for rollout_output in outputs:
+            _log_horizon_control(
+                rollout_output,
+                validate,
+                default_horizon=self.config.actor_rollout_ref.rollout.response_length,
+                **kwargs,
+            )
 
         await self._compute_score(outputs, kwargs=kwargs)
 
